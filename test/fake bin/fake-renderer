@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake mermaid-ascii for tests. The first word of the input picks the mode.
+input=$(cat)
+case "$input" in
+  FAIL*) echo "fake error: unsupported" >&2; exit 3 ;;
+  HANG*) exec sleep 30 ;;
+  DELAY*) sleep 1 ;;
+esac
+printf '%s\n' "$input" | sed 's/^/RENDER: /'
