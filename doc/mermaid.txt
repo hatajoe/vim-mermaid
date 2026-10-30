@@ -1,6 +1,6 @@
 *mermaid.txt*	Show Mermaid blocks of Markdown as ASCII art in a popup
 
-Author: hatajoe
+Author: Yusuke Hatanaka
 License: MIT
 
 ==============================================================================
