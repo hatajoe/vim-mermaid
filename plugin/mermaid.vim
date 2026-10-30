@@ -1,4 +1,4 @@
-" vim-mermaid: show Mermaid blocks of Markdown as ASCII art in a split.
+" vim-mermaid: show Mermaid blocks of Markdown as ASCII art in a popup or a split.
 if exists('g:loaded_mermaid')
   finish
 endif

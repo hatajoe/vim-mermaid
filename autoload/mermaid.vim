@@ -4,6 +4,10 @@ set cpo&vim
 
 " Preview bufnr -> {'src', 'mode', 'lnum', 'req', 'job', 'timer'}
 let s:state = {}
+" Popup mode keeps its state in t:mermaid_popup:
+" {'req', 'job', 'timer', 'popup_id', 'snap'}
+" Pending popup req -> its state, while the request has an augroup.
+let s:watched = {}
 let s:next_req = 0
 let s:install = 'go install github.com/AlexanderGrooff/mermaid-ascii@latest'
 
@@ -73,6 +77,22 @@ function! s:check_cmd() abort
   return 0
 endfunction
 
+" Return 'popup' or 'split', or '' after an error for an unknown value.
+function! s:display() abort
+  let d = s:opt('mermaid_display', 'popup')
+  if index(['popup', 'split'], d) >= 0
+    return d
+  endif
+  echohl ErrorMsg
+  echomsg printf("mermaid: g:mermaid_display must be 'popup' or 'split', not %s", string(d))
+  echohl None
+  return ''
+endfunction
+
+function! s:has_popup() abort
+  return has('popupwin')
+endfunction
+
 function! s:find_preview_win() abort
   for w in gettabinfo(tabpagenr())[0].windows
     if getbufvar(winbufnr(w), 'mermaid_preview', 0)
@@ -101,8 +121,8 @@ function! s:open_split() abort
 endfunction
 
 function! s:on_wipeout(pbuf) abort
-  call s:cancel(a:pbuf)
   if has_key(s:state, a:pbuf)
+    call s:cancel(s:state[a:pbuf])
     call remove(s:state, a:pbuf)
   endif
 endfunction
@@ -117,47 +137,50 @@ function! s:show(pbuf, lines) abort
   call setbufvar(a:pbuf, '&modifiable', 0)
 endfunction
 
-function! s:cancel(pbuf) abort
-  let st = get(s:state, a:pbuf, {})
-  if empty(st)
-    return
+" Stop the job and timer of a request state and invalidate its request.
+function! s:cancel(st) abort
+  let a:st.req = 0
+  if a:st.timer != -1
+    call timer_stop(a:st.timer)
+    let a:st.timer = -1
   endif
-  if st.timer != -1
-    call timer_stop(st.timer)
-    let st.timer = -1
+  if type(a:st.job) == v:t_job && job_status(a:st.job) ==# 'run'
+    call job_stop(a:st.job, 'kill')
   endif
-  if type(st.job) == v:t_job && job_status(st.job) ==# 'run'
-    call job_stop(st.job, 'kill')
-  endif
-  let st.job = v:null
+  let a:st.job = v:null
 endfunction
 
-function! s:current(pbuf, req) abort
-  return has_key(s:state, a:pbuf) && s:state[a:pbuf].req == a:req && bufexists(a:pbuf)
+function! s:current(r) abort
+  return a:r.st.req == a:r.req
 endfunction
 
 " Start a new render request for the preview buffer. 'out' holds lines shown
 " before the rendered blocks (used for messages when there is no block).
 function! s:start(pbuf, info, blocks, out) abort
-  call s:cancel(a:pbuf)
+  if has_key(s:state, a:pbuf)
+    call s:cancel(s:state[a:pbuf])
+  endif
   let s:next_req += 1
-  let s:state[a:pbuf] = extend(a:info, {'req': s:next_req, 'job': v:null, 'timer': -1})
-  call s:run({'pbuf': a:pbuf, 'req': s:next_req, 'blocks': a:blocks, 'idx': 0, 'out': a:out})
+  let st = extend(a:info, {'req': s:next_req, 'job': v:null, 'timer': -1})
+  let s:state[a:pbuf] = st
+  call s:run({'st': st, 'req': s:next_req, 'mode': st.mode, 'blocks': a:blocks,
+        \ 'idx': 0, 'out': a:out, 'Show': function('s:show', [a:pbuf])})
 endfunction
 
 " Render blocks one by one; each job's result is appended to r.out.
+" r.Show(lines) gets the result.
 function! s:run(r) abort
-  if !s:current(a:r.pbuf, a:r.req)
+  if !s:current(a:r)
     return
   endif
-  let st = s:state[a:r.pbuf]
+  let st = a:r.st
   if a:r.idx >= len(a:r.blocks)
     let st.job = v:null
     let st.timer = -1
-    return s:show(a:r.pbuf, a:r.out)
+    return a:r.Show(a:r.out)
   endif
   let b = a:r.blocks[a:r.idx]
-  let header = st.mode ==# 'all' ? ['-- line ' . b.start . ' --'] : []
+  let header = a:r.mode ==# 'all' ? ['-- line ' . b.start . ' --'] : []
   if s:is_empty(b.body)
     return s:next(a:r, header + ['(empty mermaid block)'])
   endif
@@ -210,8 +233,8 @@ function! s:on_timeout(ctx, timer) abort
   endif
   let a:ctx.done = 1
   call job_stop(a:ctx.job, 'kill')
-  if s:current(a:ctx.r.pbuf, a:ctx.r.req)
-    let s:state[a:ctx.r.pbuf].timer = -1
+  if s:current(a:ctx.r)
+    let a:ctx.r.st.timer = -1
     call s:next(a:ctx.r, a:ctx.header
           \ + [printf('mermaid-ascii timed out after %d ms', a:ctx.timeout)])
   endif
@@ -231,10 +254,10 @@ function! s:finish(ctx) abort
     return
   endif
   let a:ctx.done = 1
-  if !s:current(a:ctx.r.pbuf, a:ctx.r.req)
+  if !s:current(a:ctx.r)
     return
   endif
-  let st = s:state[a:ctx.r.pbuf]
+  let st = a:ctx.r.st
   call timer_stop(st.timer)
   let st.timer = -1
   if a:ctx.status == 0
@@ -246,7 +269,126 @@ function! s:finish(ctx) abort
   call s:next(a:ctx.r, a:ctx.header + lines)
 endfunction
 
+" ---- popup mode ----
+
+function! s:popup_state() abort
+  if !exists('t:mermaid_popup')
+    let t:mermaid_popup = {'req': 0, 'job': v:null, 'timer': -1, 'popup_id': 0, 'snap': []}
+  endif
+  return t:mermaid_popup
+endfunction
+
+function! s:snapshot() abort
+  return [bufnr('%'), win_getid(), line('.'), col('.'), b:changedtick]
+endfunction
+
+" Stop the pending render of this tab and close its popup. Return 1 when
+" there was something to stop or close.
+function! s:popup_reset(st) abort
+  let found = a:st.req != 0 || a:st.popup_id != 0
+  call s:popup_unwatch(a:st.req)
+  call s:cancel(a:st)
+  if a:st.popup_id
+    call popup_close(a:st.popup_id)
+    let a:st.popup_id = 0
+  endif
+  return found
+endfunction
+
+" While a render is pending, leaving the source or moving the cursor or
+" changing the text drops the request. Each request has its own augroup.
+function! s:popup_watch(st, req) abort
+  let snap = a:st.snap
+  execute 'augroup mermaid_popup_' . a:req
+    autocmd!
+    for ev in ['CursorMoved', 'CursorMovedI', 'TextChanged', 'TextChangedI', 'WinLeave', 'BufLeave']
+      execute printf('autocmd %s * call s:popup_event(%d, %d, %s)',
+            \ ev, a:req, snap[1], string(ev =~# 'Leave$'))
+    endfor
+  augroup END
+  let s:watched[a:req] = a:st
+endfunction
+
+function! s:popup_unwatch(req) abort
+  if has_key(s:watched, a:req)
+    call remove(s:watched, a:req)
+    execute 'autocmd! mermaid_popup_' . a:req
+    execute 'augroup! mermaid_popup_' . a:req
+  endif
+endfunction
+
+function! s:popup_event(req, winid, leave) abort
+  let st = get(s:watched, a:req, {})
+  if empty(st) || st.req != a:req
+    return s:popup_unwatch(a:req)
+  endif
+  if win_getid() != a:winid
+    return
+  endif
+  if a:leave || s:snapshot() != st.snap
+    call s:popup_unwatch(a:req)
+    call s:cancel(st)
+  endif
+endfunction
+
+function! s:popup_start(mode, blocks) abort
+  if !s:has_popup()
+    echohl ErrorMsg
+    echomsg "mermaid: popup mode needs +popupwin; set g:mermaid_display = 'split'"
+    echohl None
+    return
+  endif
+  let st = s:popup_state()
+  call s:popup_reset(st)
+  let s:next_req += 1
+  let st.req = s:next_req
+  let st.snap = s:snapshot()
+  call s:popup_watch(st, st.req)
+  call s:run({'st': st, 'req': st.req, 'mode': a:mode, 'blocks': a:blocks,
+        \ 'idx': 0, 'out': [], 'Show': function('s:popup_show', [st])})
+endfunction
+
+function! s:popup_show(st, lines) abort
+  call s:popup_unwatch(a:st.req)
+  let a:st.req = 0
+  " Backstop for events that did not fire: the source must be unchanged.
+  if s:snapshot() != a:st.snap
+    return
+  endif
+  let a:st.popup_id = popup_create(empty(a:lines) ? [''] : a:lines, {
+        \ 'line': 'cursor+1', 'col': 'cursor', 'pos': 'topleft',
+        \ 'border': [], 'padding': [0, 1, 0, 1], 'title': ' mermaid ',
+        \ 'wrap': 0, 'scrollbar': 1, 'resize': 0,
+        \ 'maxheight': s:opt('mermaid_popup_maxheight', max([1, &lines - 4])),
+        \ 'maxwidth': s:opt('mermaid_popup_maxwidth', max([1, &columns - 4])),
+        \ 'moved': 'any', 'filtermode': 'n',
+        \ 'filter': function('s:popup_filter'),
+        \ 'callback': function('s:popup_closed', [a:st]),
+        \ })
+endfunction
+
+" Esc closes the popup; every other key goes to Vim as usual.
+function! s:popup_filter(id, key) abort
+  if a:key ==# "\<Esc>"
+    call popup_close(a:id)
+    return 1
+  endif
+  return 0
+endfunction
+
+function! s:popup_closed(st, id, result) abort
+  if a:st.popup_id == a:id
+    let a:st.popup_id = 0
+  endif
+endfunction
+
+" ---- commands ----
+
 function! mermaid#preview() abort
+  let display = s:display()
+  if display ==# ''
+    return
+  endif
   if exists('b:mermaid_preview')
     return s:msg('mermaid: run this in a Markdown buffer, not in the preview')
   endif
@@ -260,11 +402,18 @@ function! mermaid#preview() abort
   if !s:check_cmd()
     return
   endif
+  if display ==# 'popup'
+    return s:popup_start('single', [b])
+  endif
   let pbuf = s:open_split()
   call s:start(pbuf, {'src': bufnr('%'), 'mode': 'single', 'lnum': b.start}, [b], [])
 endfunction
 
 function! mermaid#preview_all() abort
+  let display = s:display()
+  if display ==# ''
+    return
+  endif
   if exists('b:mermaid_preview')
     return s:msg('mermaid: run this in a Markdown buffer, not in the preview')
   endif
@@ -275,20 +424,31 @@ function! mermaid#preview_all() abort
   if !s:check_cmd()
     return
   endif
+  if display ==# 'popup'
+    return s:popup_start('all', blocks)
+  endif
   let pbuf = s:open_split()
   call s:start(pbuf, {'src': bufnr('%'), 'mode': 'all', 'lnum': 0}, blocks, [])
 endfunction
 
+" Close the popup and the split of this tab, whichever exist.
 function! mermaid#close() abort
+  let found = exists('t:mermaid_popup') && s:popup_reset(t:mermaid_popup)
   let w = s:find_preview_win()
-  if !w
-    return s:msg('mermaid: no preview split in this tab')
+  if w
+    execute 'bwipeout' winbufnr(w)
+  elseif !found
+    call s:msg(s:opt('mermaid_display', 'popup') ==# 'split'
+          \ ? 'mermaid: no preview split in this tab' : 'mermaid: no preview popup in this tab')
   endif
-  execute 'bwipeout' winbufnr(w)
 endfunction
 
 " BufWritePost handler: re-render every preview whose source is buf.
+" Popup previews are never refreshed.
 function! mermaid#on_write(buf) abort
+  if s:opt('mermaid_display', 'popup') !=# 'split'
+    return
+  endif
   for [key, st] in items(s:state)
     let pbuf = str2nr(key)
     if st.src != a:buf || !bufexists(pbuf)

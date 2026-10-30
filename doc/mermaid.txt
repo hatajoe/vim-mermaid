@@ -1,4 +1,4 @@
-*mermaid.txt*	Show Mermaid blocks of Markdown as ASCII art in a split
+*mermaid.txt*	Show Mermaid blocks of Markdown as ASCII art in a popup
 
 Author: hatajoe
 License: MIT
@@ -17,13 +17,15 @@ CONTENTS						*mermaid-contents*
 1. Introduction				*mermaid* *vim-mermaid* *mermaid-introduction*
 
 vim-mermaid renders a ```mermaid fenced code block of a Markdown buffer as
-ASCII art and shows it in a scratch split. It runs the external command
-mermaid-ascii (https://github.com/AlexanderGrooff/mermaid-ascii).
+ASCII art and shows it in a popup window below the cursor, or in a scratch
+split (see |g:mermaid_display|). It runs the external command mermaid-ascii
+(https://github.com/AlexanderGrooff/mermaid-ascii).
 
 ==============================================================================
 2. Requirements						*mermaid-requirements*
 
 - Vim 9.1 or later with |+job| and |+timers|. Neovim is not supported.
+- Popup mode (the default) also needs |+popupwin|. Split mode does not.
 - mermaid-ascii. Install it with: >
 	go install github.com/AlexanderGrooff/mermaid-ascii@latest
 <
@@ -32,7 +34,7 @@ Diagram types that mermaid-ascii rendered in our checks:
 - sequenceDiagram
 - erDiagram
 Other types (classDiagram, stateDiagram-v2, pie, ...) fail; the error text of
-mermaid-ascii is shown in the split.
+mermaid-ascii is shown in the popup or the split.
 
 ==============================================================================
 3. Commands						*mermaid-commands*
@@ -43,12 +45,13 @@ mermaid-ascii is shown in the split.
 			fence. The cursor stays in the source window.
 
 							*:MermaidPreviewAll*
-:MermaidPreviewAll	Render every mermaid block of the buffer into the
-			split. Each block starts with a header line
+:MermaidPreviewAll	Render every mermaid block of the buffer into one
+			popup or the split. Each block starts with a header line
 			"-- line N --", where N is the opening fence line.
 
 							*:MermaidClose*
-:MermaidClose		Close the preview split of the current tab page.
+:MermaidClose		Close the preview popup and the preview split of the
+			current tab page, and stop a running render.
 
 ==============================================================================
 4. Mappings						*mermaid-mappings*
@@ -72,18 +75,36 @@ g:mermaid_ascii_args	List of extra arguments for the renderer. The plugin
 			Example: ['-a'] draws with ASCII characters only.
 			Default: []
 
+						*g:mermaid_display*
+g:mermaid_display	Where the diagram is shown: 'popup' or 'split'. Any
+			other value gives an error and nothing is rendered.
+			Default: 'popup'
+
+					*g:mermaid_popup_maxheight*
+g:mermaid_popup_maxheight
+			Maximum height of the popup text. A longer diagram
+			gets a scrollbar.
+			Default: &lines - 4 (at least 1)
+
+					*g:mermaid_popup_maxwidth*
+g:mermaid_popup_maxwidth
+			Maximum width of the popup text.
+			Default: &columns - 4 (at least 1)
+
 						*g:mermaid_split*
-g:mermaid_split		'vertical' or 'horizontal'.
+g:mermaid_split		'vertical' or 'horizontal'. Split mode only.
 			Default: 'vertical'
 
 						*g:mermaid_auto_refresh*
-g:mermaid_auto_refresh	When 1, saving the source buffer of an open preview
-			renders it again (see |mermaid-behavior|).
+g:mermaid_auto_refresh	Split mode only. When 1, saving the source buffer of
+			an open preview split renders it again (see
+			|mermaid-behavior|). In popup mode saving does
+			nothing.
 			Default: 0
 
 						*g:mermaid_timeout_ms*
 g:mermaid_timeout_ms	Stop the renderer after this many milliseconds and
-			show "timed out" in the split.
+			show "timed out" in the popup or the split.
 			Default: 5000
 
 ==============================================================================
@@ -96,13 +117,27 @@ is a diagram only when the first word of its info string is "mermaid". A
 mermaid fence inside another fenced block is plain text. An unclosed mermaid
 block runs to the end of the buffer.
 
+Popup mode ~
+The popup opens below the cursor when the render is done. Vim moves it when
+it does not fit on the screen. Each tab page has at most one preview popup;
+a new preview closes the old one. The popup closes when:
+- the cursor moves,
+- <Esc> is pressed in Normal mode (other keys work as usual), or
+- |:MermaidClose| is run.
+The render result is dropped and no popup opens when, before the render is
+done, the cursor moves, the text changes, or you leave the window or the
+buffer. Popup mode needs |+popupwin|. Without it the commands give an error;
+set |g:mermaid_display| to 'split' instead.
+
+Split mode ~
 Each tab page has at most one preview split. The commands reuse it. The
 preview buffer has 'buftype' "nofile" and 'filetype' "mermaid-ascii".
 
 A new preview or |:MermaidClose| stops a running render, and the output of
 the stopped render is dropped.
 
-When |g:mermaid_auto_refresh| is 1 and the source buffer is saved:
+When |g:mermaid_display| is 'split', |g:mermaid_auto_refresh| is 1, and the
+source buffer is saved:
 - after |:MermaidPreviewAll|, all blocks are rendered again.
 - after |:MermaidPreview|, the plugin finds the block at the stored opening
   line, or the first mermaid block after it. If there is none, the split
