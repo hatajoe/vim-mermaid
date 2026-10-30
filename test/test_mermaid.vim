@@ -435,6 +435,47 @@ function! Test_popup_filter_keys() abort
   call assert_equal(0, t:mermaid_popup.popup_id)
 endfunction
 
+function! Test_popup_scroll_keys() abort
+  enew
+  call setline(1, ['```mermaid'] + map(range(100), '"N" . v:val') + ['```'])
+  let g:mermaid_popup_maxheight = 10
+  1
+  MermaidPreview
+  call assert_true(s:WaitPopup(3000))
+  let id = popup_list()[0]
+  let Filter = popup_getoptions(id).filter
+  call assert_equal(10, popup_getpos(id).core_height)
+  call assert_equal(1, popup_getpos(id).firstline)
+  " [key, firstline after the key]. 100 lines, 10 shown: the last firstline is 91.
+  for [key, want] in [["\<C-d>", 6], ["\<C-j>", 7], ["\<C-k>", 6], ["\<C-u>", 1],
+        \ ["\<C-u>", 1], ["\<C-k>", 1]]
+    call assert_equal(1, Filter(id, key), 'key ' . strtrans(key))
+    call assert_equal(want, popup_getpos(id).firstline, 'key ' . strtrans(key))
+  endfor
+  for _ in range(20)
+    call Filter(id, "\<C-d>")
+  endfor
+  call assert_equal(91, popup_getpos(id).firstline)
+  call assert_equal(1, Filter(id, "\<C-j>"))
+  call assert_equal(91, popup_getpos(id).firstline)
+  call assert_equal(0, Filter(id, 'x'))
+  call assert_equal([id], popup_list())
+endfunction
+
+function! Test_popup_scroll_keys_small_diagram() abort
+  call s:Open('two.md')
+  3
+  MermaidPreview
+  call assert_true(s:WaitPopup(3000))
+  let id = popup_list()[0]
+  let Filter = popup_getoptions(id).filter
+  for key in ["\<C-j>", "\<C-k>", "\<C-d>", "\<C-u>"]
+    call assert_equal(1, Filter(id, key), 'key ' . strtrans(key))
+    call assert_equal(1, popup_getpos(id).firstline, 'key ' . strtrans(key))
+  endfor
+  call assert_equal([id], popup_list())
+endfunction
+
 function! Test_popup_close_command() abort
   call s:Open('two.md')
   3
@@ -741,6 +782,30 @@ function! Test_term_esc_closes_popup_other_keys_pass() abort
   call assert_true(s:TermWaitFor(buf, '\n``mermaid', 2000), s:Shot(buf))
   call assert_match('RENDER: A --> B', s:Shot(buf))
   call term_sendkeys(buf, "\<Esc>")
+  call assert_true(s:TermWaitGone(buf, 'RENDER', 2000), s:Shot(buf))
+  call s:TermStop(buf)
+endfunction
+
+function! Test_term_scroll_keys() abort
+  let buf = s:Term('tall.md')
+  call term_sendkeys(buf, ":1\r:MermaidPreview\r")
+  call assert_true(s:TermWaitFor(buf, 'RENDER: N00', 3000), s:Shot(buf))
+  " 20 rows: the popup shows 16 lines, so half a page is 8.
+  call term_sendkeys(buf, "\<C-d>")
+  call assert_true(s:TermWaitFor(buf, 'RENDER: N23', 2000), s:Shot(buf))
+  call assert_notmatch('RENDER: N07', s:Screen(buf))
+  call assert_match('RENDER: N08', s:Screen(buf))
+  call term_sendkeys(buf, "\<C-j>")
+  call assert_true(s:TermWaitGone(buf, 'RENDER: N08', 2000), s:Shot(buf))
+  call assert_match('RENDER: N24', s:Screen(buf))
+  call term_sendkeys(buf, "\<C-u>")
+  call assert_true(s:TermWaitFor(buf, 'RENDER: N01', 2000), s:Shot(buf))
+  call assert_notmatch('RENDER: N00', s:Screen(buf))
+  call term_sendkeys(buf, "\<C-k>")
+  call assert_true(s:TermWaitFor(buf, 'RENDER: N00', 2000), s:Shot(buf))
+  " The cursor never moved: the keys did not reach Vim.
+  call assert_match('mermaid', s:Shot(buf))
+  call term_sendkeys(buf, 'j')
   call assert_true(s:TermWaitGone(buf, 'RENDER', 2000), s:Shot(buf))
   call s:TermStop(buf)
 endfunction

@@ -129,6 +129,23 @@ done, the cursor moves, the text changes, or you leave the window or the
 buffer. Popup mode needs |+popupwin|. Without it the commands give an error;
 set |g:mermaid_display| to 'split' instead.
 
+Scrolling the popup ~
+							*mermaid-popup-scroll*
+A diagram taller than |g:mermaid_popup_maxheight| gets a scrollbar. While the
+popup is open, these keys in Normal mode scroll it:
+
+	CTRL-J		one line down
+	CTRL-K		one line up
+	CTRL-D		half a page down
+	CTRL-U		half a page up
+
+The popup stays open. At the top or the bottom the keys do nothing. When the
+whole diagram fits, the keys also do nothing, but they still do not reach
+Vim. When no popup is open, the keys work as usual.
+
+The mouse wheel also scrolls the popup. This needs 'mouse' set, for example
+`:set mouse=a`, and a terminal that sends mouse events to Vim.
+
 Split mode ~
 Each tab page has at most one preview split. The commands reuse it. The
 preview buffer has 'buftype' "nofile" and 'filetype' "mermaid-ascii".

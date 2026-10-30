@@ -367,13 +367,24 @@ function! s:popup_show(st, lines) abort
         \ })
 endfunction
 
-" Esc closes the popup; every other key goes to Vim as usual.
+" Esc closes the popup. Ctrl-j/k scroll one line, Ctrl-d/u half a page;
+" they are eaten even at the end or when all lines fit, so the popup stays.
+" Every other key goes to Vim as usual.
 function! s:popup_filter(id, key) abort
   if a:key ==# "\<Esc>"
     call popup_close(a:id)
     return 1
   endif
-  return 0
+  let pos = popup_getpos(a:id)
+  let height = pos.core_height
+  let step = get({"\<C-j>": 1, "\<C-k>": -1,
+        \ "\<C-d>": max([1, height / 2]), "\<C-u>": -max([1, height / 2])}, a:key, 0)
+  if step == 0
+    return 0
+  endif
+  let last = max([1, line('$', a:id) - height + 1])
+  call popup_setoptions(a:id, {'firstline': min([last, max([1, pos.firstline + step])])})
+  return 1
 endfunction
 
 function! s:popup_closed(st, id, result) abort

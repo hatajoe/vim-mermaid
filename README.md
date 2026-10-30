@@ -63,6 +63,26 @@ By default the diagram opens in a popup window below the cursor.
 The popup closes when the cursor moves, when you press `<Esc>` in Normal mode, or with `:MermaidClose`.
 If the cursor moves or the text changes before the render is done, no popup opens.
 
+### Scrolling the popup
+
+A diagram taller than the popup gets a scrollbar.
+While the popup is open, these keys in Normal mode scroll it:
+
+| Key | Action |
+|---|---|
+| `<C-j>` | One line down |
+| `<C-k>` | One line up |
+| `<C-d>` | Half a page down |
+| `<C-u>` | Half a page up |
+
+The popup stays open.
+At the top or the bottom, the keys do nothing.
+When the whole diagram fits, the keys also do nothing, but they do not reach Vim.
+When no popup is open, the keys work as usual.
+
+The mouse wheel also scrolls the popup.
+This needs `:set mouse=a` and a terminal that sends mouse events to Vim.
+
 To use a split window instead, set:
 
 ```vim
